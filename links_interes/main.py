@@ -21,7 +21,7 @@ class LinksDeInteresApp:
 
     def init_database(self):
         """Inicializa la conexión a la base de datos y crea las tablas si no existen"""
-        self.conn = sqlite3.connect('linksdeinteres.db')
+        self.conn = sqlite3.connect('links_interes.db')
         self.cursor = self.conn.cursor()
 
         # Crear tablas si no existen

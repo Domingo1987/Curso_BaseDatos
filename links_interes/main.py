@@ -1,8 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import sqlite3
+# Importamos mysql.connector en lugar de sqlite3
+import mysql.connector
+from mysql.connector import Error, IntegrityError  # <-- Para manejar excepciones específicas
+# import sqlite3
 from datetime import datetime
-
 
 class LinksDeInteresApp:
     def __init__(self, root):
@@ -20,41 +22,67 @@ class LinksDeInteresApp:
         self.load_data()
 
     def init_database(self):
-        """Inicializa la conexión a la base de datos y crea las tablas si no existen"""
-        self.conn = sqlite3.connect('links_interes.db')
-        self.cursor = self.conn.cursor()
+        """        Inicializa la conexión a la base de datos MySQL y crea las tablas si no existen."""
+        # self.conn = sqlite3.connect('links_interes.db')
 
-        # Crear tablas si no existen
-        self.cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuario (
-            id TEXT PRIMARY KEY,
-            nombre TEXT NOT NULL,
-            apellido TEXT NOT NULL,
-            email TEXT UNIQUE
-        )
-        ''')
+        try:
+            # 2) Conexión a MySQL
+            self.conn = mysql.connector.connect(
+                host="localhost",  # <-- Ajusta según tu entorno
+                user="root",  # <-- Cambia por tu usuario de MySQL
+                password="",  # <-- Cambia por tu contraseña (si tienes)
+                database="links_db"  # <-- Debe existir previamente
+            )
+            self.cursor = self.conn.cursor()
 
-        self.cursor.execute('''
-        CREATE TABLE IF NOT EXISTS multimedia (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tipo TEXT NOT NULL
-        )
-        ''')
+        except Error as e:
+            messagebox.showerror("Error de conexión", f"No se pudo conectar a MySQL: {e}")
+            return
 
+        #  Crear tablas en MySQL (adaptadas de SQLite a MySQL)
+        # - Usamos tipos VARCHAR en lugar de TEXT para llaves primarias o foráneas.
+        # - Cambiamos INTEGER PRIMARY KEY AUTOINCREMENT a INT AUTO_INCREMENT.
+        # - Añadimos ENGINE=InnoDB para soportar claves foráneas.
+        # - MySQL no entiende AUTOINCREMENT como en SQLite, se usa AUTO_INCREMENT.
+
+        # Tabla usuario
         self.cursor.execute('''
-        CREATE TABLE IF NOT EXISTS links (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario_id TEXT NOT NULL,
-            link TEXT NOT NULL,
-            multimedia_id INTEGER NOT NULL,
-            fecha DATE DEFAULT CURRENT_DATE,
-            autor TEXT,
-            descripcion TEXT,
-            tema TEXT,
-            FOREIGN KEY (usuario_id) REFERENCES usuario(id),
-            FOREIGN KEY (multimedia_id) REFERENCES multimedia(id)
-        )
-        ''')
+                CREATE TABLE IF NOT EXISTS usuario (
+                    id VARCHAR(30) NOT NULL,
+                    nombre VARCHAR(100) NOT NULL,
+                    apellido VARCHAR(100) NOT NULL,
+                    email VARCHAR(100) UNIQUE,
+                    PRIMARY KEY (id)
+                ) ENGINE=InnoDB
+            ''')
+
+        # Tabla multimedia
+        self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS multimedia (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    tipo VARCHAR(50) NOT NULL
+                ) ENGINE=InnoDB
+            ''')
+
+        # Tabla links
+        # Nota: Para la columna fecha, usamos DATE con DEFAULT CURDATE()
+        # (si tu versión de MySQL lo soporta).
+        # Si da error de sintaxis, podrías dejarla como DATE sin default
+        # y asignar la fecha en tu código Python.
+        self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS links (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    usuario_id VARCHAR(30) NOT NULL,
+                    link TEXT NOT NULL,
+                    multimedia_id INT NOT NULL,
+                    fecha DATE DEFAULT (CURDATE()),
+                    autor VARCHAR(100),
+                    descripcion TEXT,
+                    tema VARCHAR(100),
+                    FOREIGN KEY (usuario_id) REFERENCES usuario(id),
+                    FOREIGN KEY (multimedia_id) REFERENCES multimedia(id)
+                ) ENGINE=InnoDB
+            ''')
 
         # Verificar si existen tipos de multimedia, si no, agregar tipos por defecto
         self.cursor.execute("SELECT COUNT(*) FROM multimedia")
@@ -62,7 +90,7 @@ class LinksDeInteresApp:
         if count == 0:
             multimedia_types = ['Audio', 'Video', 'Imagen', 'Documento', 'Otro']
             for tipo in multimedia_types:
-                self.cursor.execute("INSERT INTO multimedia (tipo) VALUES (?)", (tipo,))
+                self.cursor.execute("INSERT INTO multimedia (tipo) VALUES (%s)", (tipo,))
 
         self.conn.commit()
 
@@ -271,13 +299,19 @@ class LinksDeInteresApp:
         for item in self.links_table.get_children():
             self.links_table.delete(item)
 
-        # Obtener links de la BD con información de usuario y multimedia
+        # Unimos las tablas links, usuario y multimedia
         self.cursor.execute("""
-            SELECT l.id, u.nombre || ' ' || u.apellido, l.link, m.tipo, l.fecha, l.autor, l.tema
-            FROM links l
-            JOIN usuario u ON l.usuario_id = u.id
-            JOIN multimedia m ON l.multimedia_id = m.id
-        """)
+                SELECT l.id,
+                       CONCAT(u.nombre, ' ', u.apellido) AS usuario,
+                       l.link,
+                       m.tipo,
+                       l.fecha,
+                       l.autor,
+                       l.tema
+                FROM links l
+                JOIN usuario u ON l.usuario_id = u.id
+                JOIN multimedia m ON l.multimedia_id = m.id
+            """)
         links = self.cursor.fetchall()
 
         # Insertar en tabla
@@ -297,16 +331,17 @@ class LinksDeInteresApp:
 
         try:
             self.cursor.execute(
-                "INSERT INTO usuario (id, nombre, apellido, email) VALUES (?, ?, ?, ?)",
+                "INSERT INTO usuario (id, nombre, apellido, email) VALUES (%s, %s, %s, %s)",
                 (user_id, nombre, apellido, email)
             )
             self.conn.commit()
             messagebox.showinfo("Éxito", "Usuario guardado correctamente")
             self.clear_user_form()
             self.load_users()
-        except sqlite3.IntegrityError:
+        except IntegrityError:
+            # Manejo de error por violación de PK o UNIQUE
             messagebox.showerror("Error", "El ID o Email ya existe en la base de datos")
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al guardar: {str(e)}")
 
     def update_user(self):
@@ -322,7 +357,7 @@ class LinksDeInteresApp:
 
         try:
             self.cursor.execute(
-                "UPDATE usuario SET nombre = ?, apellido = ?, email = ? WHERE id = ?",
+                "UPDATE usuario SET nombre = %s, apellido = %s, email = %s WHERE id = %s",
                 (nombre, apellido, email, user_id)
             )
             if self.cursor.rowcount == 0:
@@ -334,7 +369,7 @@ class LinksDeInteresApp:
             self.clear_user_form()
             self.load_users()
             self.load_links()  # Recargar links ya que muestran el nombre de usuario
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al actualizar: {str(e)}")
 
     def delete_user(self):
@@ -351,22 +386,21 @@ class LinksDeInteresApp:
             return
 
         try:
-            # Primero eliminar todos los links asociados a este usuario
-            self.cursor.execute("DELETE FROM links WHERE usuario_id = ?", (user_id,))
+            # Eliminar manualmente sus links si no tuvieras ON DELETE CASCADE:
+            # self.cursor.execute("DELETE FROM links WHERE usuario_id = %s", (user_id,))
 
-            # Luego eliminar el usuario
-            self.cursor.execute("DELETE FROM usuario WHERE id = ?", (user_id,))
+            self.cursor.execute("DELETE FROM usuario WHERE id = %s", (user_id,))
+            self.conn.commit()
 
             if self.cursor.rowcount == 0:
                 messagebox.showerror("Error", "Usuario no encontrado")
                 return
 
-            self.conn.commit()
             messagebox.showinfo("Éxito", "Usuario eliminado correctamente")
             self.clear_user_form()
             self.load_users()
             self.load_links()
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al eliminar: {str(e)}")
 
     def save_link(self):
@@ -396,16 +430,16 @@ class LinksDeInteresApp:
 
         try:
             self.cursor.execute(
-                """INSERT INTO links 
-                   (usuario_id, link, multimedia_id, fecha, autor, descripcion, tema) 
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO links
+                   (usuario_id, link, multimedia_id, fecha, autor, descripcion, tema)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)""",
                 (user_id, link, multimedia_id, fecha, autor, descripcion, tema)
             )
             self.conn.commit()
             messagebox.showinfo("Éxito", "Link guardado correctamente")
             self.clear_link_form()
             self.load_links()
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al guardar: {str(e)}")
 
     def update_link(self):
@@ -441,17 +475,22 @@ class LinksDeInteresApp:
 
         try:
             self.cursor.execute(
-                """UPDATE links SET 
-                   usuario_id = ?, link = ?, multimedia_id = ?, 
-                   fecha = ?, autor = ?, descripcion = ?, tema = ? 
-                   WHERE id = ?""",
+                """UPDATE links SET
+                   usuario_id = %s, link = %s, multimedia_id = %s,
+                   fecha = %s, autor = %s, descripcion = %s, tema = %s
+                   WHERE id = %s""",
                 (user_id, link, multimedia_id, fecha, autor, descripcion, tema, link_id)
             )
             self.conn.commit()
+
+            if self.cursor.rowcount == 0:
+                messagebox.showerror("Error", "Link no encontrado")
+                return
+
             messagebox.showinfo("Éxito", "Link actualizado correctamente")
             self.clear_link_form()
             self.load_links()
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al actualizar: {str(e)}")
 
     def delete_link(self):
@@ -467,17 +506,17 @@ class LinksDeInteresApp:
             return
 
         try:
-            self.cursor.execute("DELETE FROM links WHERE id = ?", (link_id,))
+            self.cursor.execute("DELETE FROM links WHERE id = %s", (link_id,))
+            self.conn.commit()
 
             if self.cursor.rowcount == 0:
                 messagebox.showerror("Error", "Link no encontrado")
                 return
 
-            self.conn.commit()
             messagebox.showinfo("Éxito", "Link eliminado correctamente")
             self.clear_link_form()
             self.load_links()
-        except Exception as e:
+        except Error as e:
             messagebox.showerror("Error", f"Error al eliminar: {str(e)}")
 
     def on_user_select(self, event):
@@ -500,20 +539,23 @@ class LinksDeInteresApp:
 
     def on_link_select(self, event):
         """Maneja la selección de link desde la tabla"""
-        selected_item = self.links_table.selection()[0]
-        link_data = self.links_table.item(selected_item, 'values')
+        selected_item = self.links_table.selection()
+        if not selected_item:
+            return
+
+        link_data = self.links_table.item(selected_item[0], 'values')
+        link_id = link_data[0]
 
         # Obtener el registro completo del link desde la base de datos
         self.cursor.execute("""
-            SELECT l.id, l.usuario_id, u.nombre, u.apellido, l.link, 
-                   l.multimedia_id, m.tipo, l.fecha, l.autor, 
+            SELECT l.id, l.usuario_id, u.nombre, u.apellido, l.link,
+                   l.multimedia_id, m.tipo, l.fecha, l.autor,
                    l.descripcion, l.tema
             FROM links l
             JOIN usuario u ON l.usuario_id = u.id
             JOIN multimedia m ON l.multimedia_id = m.id
-            WHERE l.id = ?
-        """, (link_data[0],))
-
+            WHERE l.id = %s
+        """, (link_id,))
         link = self.cursor.fetchone()
         if not link:
             return
